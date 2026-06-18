@@ -1,0 +1,10 @@
+# virtual env (system-site-packages venv holding trl 0.19.1 + peft)
+.venv/
+
+# training outputs & run artifacts
+out-grpo-toy/
+run_log*.txt
+
+# python
+__pycache__/
+*.pyc

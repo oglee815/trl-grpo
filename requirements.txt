@@ -1,0 +1,10 @@
+# Known-good versions for reproducing on B300 (Linux).
+# Your local env already satisfies these.
+torch>=2.3
+transformers>=4.57
+trl>=1.5
+datasets>=2.19
+accelerate>=0.34
+# B300 only (fast generation + attention):
+# vllm
+# flash-attn
