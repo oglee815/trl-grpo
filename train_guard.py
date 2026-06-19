@@ -99,10 +99,56 @@ def build_dataset(tokenizer, ga: GuardArgs):
     return ds.map(fmt, remove_columns=ds.column_names)
 
 
+def _apply_leftovers(leftover, training_args, model_args):
+    """Apply CLI flags this trl version's parser didn't recognize, so the run does
+    not crash on a renamed/removed field. Handles known renames (torch_dtype <->
+    dtype) and warns + skips anything with no matching field."""
+    aliases = {"torch_dtype": ("dtype", "torch_dtype"), "dtype": ("dtype", "torch_dtype")}
+    pairs, i = [], 0
+    while i < len(leftover):
+        t = leftover[i]
+        if not t.startswith("--"):
+            i += 1
+            continue
+        if "=" in t:
+            k, v, i = t[2:].split("=", 1)[0], t.split("=", 1)[1], i + 1
+        elif i + 1 < len(leftover) and not leftover[i + 1].startswith("--"):
+            k, v, i = t[2:], leftover[i + 1], i + 2
+        else:
+            k, v, i = t[2:], "true", i + 1
+        pairs.append((k, v))
+
+    def _cast(v, ref):
+        if isinstance(ref, bool):
+            return str(v).lower() in ("1", "true", "yes")
+        if isinstance(ref, float):
+            try:
+                return float(v)
+            except ValueError:
+                return ref
+        if isinstance(ref, int):
+            try:
+                return int(v)
+            except ValueError:
+                return ref
+        return v
+
+    for k, v in pairs:
+        for obj in (training_args, model_args):
+            hit = next((n for n in aliases.get(k, (k,)) if hasattr(obj, n)), None)
+            if hit is not None:
+                setattr(obj, hit, _cast(v, getattr(obj, hit)))
+                print(f"[args] --{k} -> {type(obj).__name__}.{hit}={v}", flush=True)
+                break
+        else:
+            print(f"[args] WARNING: --{k}={v} is not a field in this trl version; ignored", flush=True)
+
+
 def main():
-    guard_args, training_args, model_args = TrlParser(
+    guard_args, training_args, model_args, leftover = TrlParser(
         (GuardArgs, GRPOConfig, ModelConfig)
-    ).parse_args_and_config()
+    ).parse_args_and_config(return_remaining_strings=True)
+    _apply_leftovers(leftover, training_args, model_args)
 
     reward_mod.set_think_delimiters(guard_args.think_open, guard_args.think_close)
 
@@ -132,11 +178,13 @@ def main():
         reward_funcs.append(debug_dump)
         training_args.reward_weights.append(0.0)
 
+    import transformers
     mik = {}
     if model_args.attn_implementation:
         mik["attn_implementation"] = model_args.attn_implementation
-    if model_args.torch_dtype:
-        mik["torch_dtype"] = model_args.torch_dtype
+    dt = getattr(model_args, "dtype", None) or getattr(model_args, "torch_dtype", None)
+    if dt and dt != "auto":  # transformers 5 renamed model_init torch_dtype -> dtype
+        mik["dtype" if int(transformers.__version__.split(".")[0]) >= 5 else "torch_dtype"] = dt
     training_args.model_init_kwargs = mik
     if training_args.gradient_checkpointing:
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
