@@ -70,26 +70,39 @@ block** (no `####`). Correctness = verdict matches gold (`reward.extract_verdict
 Allow Condition (exception), including "block-topic but allow-exception" cases so
 the model must reason rather than keyword-match.
 
+`train_guard.py` is a TRL `TrlParser` CLI (GuardArgs + GRPOConfig + ModelConfig),
+launched via `train.sh` (multi-GPU `torchrun`) or directly. Local toy (Qwen, LoRA,
+`<think>`):
+
 ```powershell
-$env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
-$env:NUM_GEN="8"; $env:MAX_STEPS="30"; $env:LR="1e-5"; $env:TEMP="0.7"; $env:MAX_COMPLETION="512"
-.\.venv\Scripts\python.exe train_guard.py
+.\.venv\Scripts\python.exe train_guard.py `
+  --model_name_or_path Qwen/Qwen2.5-1.5B-Instruct --use_peft --lora_target_modules all-linear `
+  --num_generations 8 --per_device_train_batch_size 8 --learning_rate 1e-5 --temperature 0.7 `
+  --max_completion_length 512 --max_think_tokens 256 --max_steps 30 --bf16 True `
+  --report_to none --output_dir out-grpo-guard `
+  --think_open "<think>" --think_close "</think>" --attn_implementation eager
 ```
 Observed: policy-grounded reasoning in the think block then a bare `block`/`allow`
 (`format≈1.0`, `brevity≈0.88`); correctness runs ~0.75–1.0 — a *real* signal,
 since the allow-exception cases are genuinely harder. Reward tracks the 4-way
 design (correct+concise ≈ 1.65, drops to ~1.4 when wrong).
 
-Real data: drop examples into a JSONL file — fields `input`, `label`
-(`block`/`allow`), and `policies` (list[str]) or `policy` (str); see
-[guard_sample.jsonl](guard_sample.jsonl). Point training at it with
-`GUARD_DATA=path` (multiple `<policy>` per example is rendered into the
+Real data: a JSONL file — fields `input`, `label` (`block`/`allow`), and `policies`
+(list[str]) or `policy` (str); see [guard_sample.jsonl](guard_sample.jsonl). Pass
+`--dataset_name path.jsonl` (multiple `<policy>` per example is rendered into the
 `<policy_set>`). GRPO needs **no gold reasoning** — only the verdict label.
 
-```powershell
-$env:GUARD_DATA="guard_train.jsonl"; $env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
-.\.venv\Scripts\python.exe train_guard.py
+B300 (8 GPUs, Gemma 4) — `train.sh` mirrors the `sft.py` workflow:
+
+```bash
+bash train.sh --model /path/to/gemma-4-E2B-it --data dataset/guard_train.jsonl \
+  --epochs 3 --gpus 8 --batch 1 --accum 8 --num_generations 16 --native
 ```
+`--native` turns on the Gemma thought channel (prompt pre-rendered with
+`enable_thinking=True` → system `<|think|>`, verbatim single-word output); channel
+delimiters `<|channel>thought` / `<channel|>` are the defaults. `num_generations`
+must divide `gpus*batch*accum`. (If completions come out empty/garbled with
+gradient checkpointing, add `--no_grad_ckpt`.)
 
 Two gotchas:
 - Gold column must be `answer`, **not** `label` — trl reserves `label` (KeyError otherwise).

@@ -1,43 +1,44 @@
 """
-GRPO toy for the AI-safety-guard task: given a POLICY and an INPUT, decide
-'block' (input violates policy) or 'allow', thinking first.
+GRPO training for the AI-safety-guard task — CLI / torchrun launcher.
 
-Reward ordering (same lexicographic design as the math toy):
-    correct + short  >  correct + long  >  wrong + short  >  wrong + long
-where "correct" = predicted block/allow verdict matches the gold label.
+Uses TRL's standard parser (GuardArgs + GRPOConfig + ModelConfig), so every HF /
+GRPO / LoRA flag is available on the command line, and it runs under torchrun for
+multi-GPU. Launch via train.sh, or directly:
 
-Local demo (Windows, 12GB):
-  $env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
-  $env:NUM_GEN="8"; $env:MAX_STEPS="20"; $env:LR="1e-5"; $env:TEMP="0.7"; $env:MAX_COMPLETION="512"
-  .\.venv\Scripts\python.exe train_guard.py
-B300: MODEL_NAME=google/gemma-4-E2B-it + set_think_delimiters("<|channel>thought","<channel|>")
-      + enable_thinking=True prerender (see train_grpo.py header).
+  python train_guard.py --model_name_or_path <path> --dataset_name <jsonl> \
+      --num_generations 8 --per_device_train_batch_size 1 --gradient_accumulation_steps 8 \
+      --learning_rate 1e-5 --num_train_epochs 3 --bf16 True --output_dir out --use_peft
+
+B300 / Gemma 4: add  --native_thinking --think_open "<|channel>thought" \
+      --think_close "<channel|>" --attn_implementation flash_attention_2
 """
-import os
+from dataclasses import dataclass, field
 
-import torch
 from transformers import AutoTokenizer
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 
-from reward import build_reward_funcs, is_correct_verdict, THINK_OPEN, THINK_CLOSE
+import reward as reward_mod
+from reward import (build_reward_funcs, is_correct_verdict, get_completion_text,
+                    extract_verdict)
 from guard_data import get_guard_dataset
 
-# --- Config (toy defaults) -------------------------------------------------
-MODEL_NAME = os.environ.get("MODEL_NAME", "google/gemma-3-270m-it")
-GUARD_DATA = os.environ.get("GUARD_DATA", "")  # path to a JSONL file; empty = built-in toy set
-MAX_THINK_TOKENS = int(os.environ.get("MAX_THINK", "256"))
-USE_VLLM = False
-USE_LORA = os.environ.get("USE_LORA", "0") == "1"
-MAX_STEPS = int(os.environ.get("MAX_STEPS", "5"))
-NUM_GEN = int(os.environ.get("NUM_GEN", "4"))
-LR = float(os.environ.get("LR", "1e-6"))
-TEMP = float(os.environ.get("TEMP", "1.0"))
-MAX_COMPLETION = int(os.environ.get("MAX_COMPLETION", "256"))
-GRAD_CKPT = os.environ.get("GRAD_CKPT", "0") == "1"   # keep OFF (see train_grpo.py note)
-BREVITY_W = float(os.environ.get("BREVITY_W", "0.5"))  # must stay < 1.0
 
-# Real guard instruction body (Role / Task / Decision / Notion). The Output Format
-# section differs by model and is appended in build_dataset().
+@dataclass
+class GuardArgs:
+    dataset_name: str = field(default="", metadata={"help": "JSONL path; empty = built-in toy set"})
+    max_think_tokens: int = field(default=512, metadata={"help": "brevity normalizer"})
+    brevity_weight: float = field(default=0.5, metadata={"help": "must stay < 1.0"})
+    format_weight: float = 0.2
+    wrong_answer_length_mode: str = field(default="shorter_better",
+                                          metadata={"help": "shorter_better | longer_better"})
+    think_open: str = "<think>"
+    think_close: str = "</think>"
+    native_thinking: bool = field(default=False, metadata={
+        "help": "Gemma native thought channel: pre-render the prompt with "
+                "enable_thinking=True and use the verbatim single-word output format"})
+    dump_completions: bool = field(default=False, metadata={"help": "print completion[0] once (debug)"})
+
+
 GUARD_BODY = (
     "# Role\n"
     "You are a sophisticated policy-based classification model acting as an AI Safety Filter.\n\n"
@@ -54,22 +55,20 @@ GUARD_BODY = (
     "statements are block vs allow conditions, then decide.\n"
     "- Keep your internal reasoning brief and concise."
 )
-
-# Real Gemma 4: native thinking (system <|think|> + enable_thinking=True), so the
-# post-channel output is genuinely a single word. Use this verbatim on B300.
+# Gemma 4 (native thinking): the post-channel output is genuinely one word.
 GEMMA_OUTPUT_FORMAT = "\n\n# Output Format\nOutput only a single word: block or allow."
 
-# Toy: Qwen is NOT a native thinking model, so a bare "output one word" makes it
-# skip reasoning entirely (format=0 for every sample -> GRPO has nothing to
-# reinforce). The toy Output Format elicits the <think> wrapper explicitly.
-# Swap for GEMMA_OUTPUT_FORMAT on B300.
-TOY_OUTPUT_FORMAT = (
-    f"\n\n# Output Format (IMPORTANT)\nYour reply MUST begin with {THINK_OPEN}, then brief "
-    f"reasoning, then {THINK_CLOSE}, then a single word: block or allow. Do not write the "
-    f"verdict before {THINK_OPEN}.\n"
-    f"Example:\n{THINK_OPEN} The input asks for public facts; no block condition applies. "
-    f"{THINK_CLOSE} allow"
-)
+
+def toy_output_format(think_open: str, think_close: str) -> str:
+    # Non-thinking models (e.g. Qwen) skip reasoning under a bare "one word"
+    # instruction, so we elicit the think wrapper explicitly.
+    return (
+        f"\n\n# Output Format (IMPORTANT)\nYour reply MUST begin with {think_open}, then brief "
+        f"reasoning, then {think_close}, then a single word: block or allow. Do not write the "
+        f"verdict before {think_open}.\n"
+        f"Example:\n{think_open} The input asks for public facts; no block condition applies. "
+        f"{think_close} allow"
+    )
 
 
 def _render_policy_set(policies):
@@ -77,97 +76,85 @@ def _render_policy_set(policies):
     return f"<policy_set>\n{items}\n</policy_set>"
 
 
-def build_dataset():
-    ds = get_guard_dataset(GUARD_DATA or None)
+def build_dataset(tokenizer, ga: GuardArgs):
+    ds = get_guard_dataset(ga.dataset_name or None)
+    out_fmt = GEMMA_OUTPUT_FORMAT if ga.native_thinking else toy_output_format(ga.think_open, ga.think_close)
 
     def fmt(ex):
         user = (
-            GUARD_BODY + TOY_OUTPUT_FORMAT
+            GUARD_BODY + out_fmt
             + "\n\n-----\n\nNow decide for the policy and input below.\n\n"
             + f"# Policy:\n{_render_policy_set(ex['policies'])}\n\n"
             + f"# Input:\n<input>\n{ex['input']}\n</input>\n\n# Final Answer:"
         )
-        # NOTE: name the gold column "answer", NOT "label" — trl reserves "label"
-        # and would try to validate it as a chat-template key (KeyError otherwise).
-        return {"prompt": [{"role": "user", "content": user}], "answer": ex["label"]}
+        messages = [{"role": "user", "content": user}]
+        if ga.native_thinking:
+            # Pre-render so the system turn carries <|think|>. trl tokenizes prompt
+            # strings with add_special_tokens=False, so no double BOS.
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
+            return {"prompt": prompt, "answer": ex["label"]}
+        return {"prompt": messages, "answer": ex["label"]}  # conversational (toy)
 
     return ds.map(fmt, remove_columns=ds.column_names)
 
 
 def main():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    guard_args, training_args, model_args = TrlParser(
+        (GuardArgs, GRPOConfig, ModelConfig)
+    ).parse_args_and_config()
+
+    reward_mod.set_think_delimiters(guard_args.think_open, guard_args.think_close)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
 
     correctness, brevity, fmt = build_reward_funcs(
         tokenizer=tokenizer,
-        max_think_tokens=MAX_THINK_TOKENS,
-        wrong_answer_length_mode="shorter_better",
-        answer_key="answer",                # gold column ("label" is reserved by trl)
-        is_correct_fn=is_correct_verdict,   # guard correctness = verdict match
+        max_think_tokens=guard_args.max_think_tokens,
+        wrong_answer_length_mode=guard_args.wrong_answer_length_mode,
+        answer_key="answer",
+        is_correct_fn=is_correct_verdict,
     )
-
     reward_funcs = [correctness, brevity, fmt]
-    reward_weights = [1.0, BREVITY_W, 0.2]
-    if os.environ.get("DEBUG") == "1":
-        from reward import get_completion_text, extract_verdict
+    training_args.reward_weights = [1.0, guard_args.brevity_weight, guard_args.format_weight]
+
+    if guard_args.dump_completions:
         _seen = []
 
         def debug_dump(prompts=None, completions=None, **kwargs):
             if not _seen:
-                txt = get_completion_text(completions[0])
-                print("\n===== DEBUG completion[0] =====")
-                print(repr(txt[:1200]))
-                print("verdict ->", extract_verdict(txt), "\n", flush=True)
+                t = get_completion_text(completions[0])
+                print("\n[DEBUG] completion[0]:", repr(t[:800]),
+                      "-> verdict", extract_verdict(t), "\n", flush=True)
                 _seen.append(1)
             return [0.0] * len(completions)
 
         reward_funcs.append(debug_dump)
-        reward_weights.append(0.0)
+        training_args.reward_weights.append(0.0)
 
-    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    model_init_kwargs = {"attn_implementation": "eager"}
-    if USE_LORA:
-        model_init_kwargs["torch_dtype"] = "bfloat16"
+    mik = {}
+    if model_args.attn_implementation:
+        mik["attn_implementation"] = model_args.attn_implementation
+    if model_args.torch_dtype:
+        mik["torch_dtype"] = model_args.torch_dtype
+    training_args.model_init_kwargs = mik
+    if training_args.gradient_checkpointing:
+        training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
 
-    peft_config = None
-    if USE_LORA:
-        from peft import LoraConfig
-        peft_config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05,
-            target_modules="all-linear", task_type="CAUSAL_LM",
-        )
-
-    args = GRPOConfig(
-        output_dir="out-grpo-guard",
-        per_device_train_batch_size=NUM_GEN,
-        gradient_accumulation_steps=1,
-        num_generations=NUM_GEN,
-        max_prompt_length=384,
-        max_completion_length=MAX_COMPLETION,
-        temperature=TEMP,
-        learning_rate=LR,
-        max_steps=MAX_STEPS,
-        logging_steps=1,
-        save_strategy="no",
-        bf16=bf16,
-        fp16=torch.cuda.is_available() and not bf16,
-        gradient_checkpointing=USE_LORA and GRAD_CKPT,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        use_vllm=USE_VLLM,
-        reward_weights=reward_weights,
-        model_init_kwargs=model_init_kwargs,
-        report_to="none",
-    )
+    peft_config = get_peft_config(model_args)
+    if peft_config is not None and peft_config.target_modules == ["all-linear"]:
+        peft_config.target_modules = "all-linear"   # peft wants the bare string
 
     trainer = GRPOTrainer(
-        model=MODEL_NAME,
+        model=model_args.model_name_or_path,
         reward_funcs=reward_funcs,
-        args=args,
-        train_dataset=build_dataset(),
+        args=training_args,
+        train_dataset=build_dataset(tokenizer, guard_args),
         processing_class=tokenizer,
         peft_config=peft_config,
     )
     trainer.train()
-    print("guard toy run finished -> ./out-grpo-guard")
+    trainer.save_model(training_args.output_dir)
 
 
 if __name__ == "__main__":
