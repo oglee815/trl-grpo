@@ -103,8 +103,14 @@ _VERDICT_RE = re.compile(r"####\s*(block|allow)", re.IGNORECASE)
 
 
 def extract_verdict(text: str) -> Optional[str]:
-    """Pull a block/allow verdict from a guard model's final answer.
-    Prefers an explicit '#### block|allow' marker, else the last bare keyword."""
+    """Pull a block/allow verdict. The real Gemma format puts the bare word right
+    after the thought channel ('<channel|>block'); the toy puts it after
+    '</think>'. So prefer the FIRST keyword in the post-think tail, then a
+    '#### block|allow' marker, then the last keyword anywhere."""
+    tail = extract_final_answer(text)
+    m = re.search(r"\b(block|allow)\b", tail, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
     m = _VERDICT_RE.search(text)
     if m:
         return m.group(1).lower()

@@ -60,23 +60,32 @@ closable think block before you spend a training run; `parse_log.py` tabulates a
 saved stdout log.
 
 ## AI-safety-guard task (the real goal)
-Same lexicographic reward, task-specific correctness: given a POLICY + INPUT, the
-model thinks then outputs `block` (violates) / `allow`. Correctness = verdict
-matches the gold label (`reward.is_correct_verdict` / `extract_verdict`, plugged
-in via `build_reward_funcs(is_correct_fn=...)`). Toy data: `guard_data.py`
-(32 balanced examples across 5 policies). Train: `train_guard.py`.
+Given a POLICY (with Block/Allow conditions) + INPUT, the model reasons then
+outputs a single word `block`/`allow`. The prompt mirrors the real Gemma format:
+the Role/Task/Decision-process instruction + `<policy_set><policy id="1">` +
+`<input>` + `# Final Answer:`; the verdict is a **bare word right after the think
+block** (no `####`). Correctness = verdict matches gold (`reward.extract_verdict`
+/ `is_correct_verdict`, via `build_reward_funcs(is_correct_fn=...)`). Toy data
+`guard_data.py`: 30 examples / 5 policies, each with a Block Condition and an
+Allow Condition (exception), including "block-topic but allow-exception" cases so
+the model must reason rather than keyword-match.
 
 ```powershell
 $env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
 $env:NUM_GEN="8"; $env:MAX_STEPS="30"; $env:LR="1e-5"; $env:TEMP="0.7"; $env:MAX_COMPLETION="512"
 .\.venv\Scripts\python.exe train_guard.py
 ```
-Observed: the model first *shortcuts* (emits `#### allow` with no reasoning,
-`format≈0.25`); GRPO then drives `format 0.25→1.0` within ~5 steps and converges
-to "brief think + correct verdict" (`correctness≈1.0`, `brevity≈0.88`,
-`reward≈1.64`) — the think-then-answer behavior the task wants.
-Gotcha: name the gold column `answer`, **not** `label` — trl reserves `label`
-and validates it as a chat-template key (KeyError otherwise).
+Observed: policy-grounded reasoning in the think block then a bare `block`/`allow`
+(`format≈1.0`, `brevity≈0.88`); correctness runs ~0.75–1.0 — a *real* signal,
+since the allow-exception cases are genuinely harder. Reward tracks the 4-way
+design (correct+concise ≈ 1.65, drops to ~1.4 when wrong).
+
+Two gotchas:
+- Gold column must be `answer`, **not** `label` — trl reserves `label` (KeyError otherwise).
+- On a non-thinking toy model (Qwen), the verbatim real instruction "Output only a
+  single word" makes it skip reasoning (`format=0`, nothing for GRPO to reinforce).
+  The toy Output Format elicits `<think>` explicitly; on Gemma 4 use the verbatim
+  `GEMMA_OUTPUT_FORMAT` + native `<|think|>` / `enable_thinking=True`.
 
 ## B300 (Linux) real run — checklist
 - `MODEL_NAME = "google/gemma-4-E2B-it"` (smallest Gemma 4; E4B for more quality).

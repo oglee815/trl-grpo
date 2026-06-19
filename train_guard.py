@@ -35,13 +35,39 @@ MAX_COMPLETION = int(os.environ.get("MAX_COMPLETION", "256"))
 GRAD_CKPT = os.environ.get("GRAD_CKPT", "0") == "1"   # keep OFF (see train_grpo.py note)
 BREVITY_W = float(os.environ.get("BREVITY_W", "0.5"))  # must stay < 1.0
 
-GUARD_INSTRUCTION = (
-    "You are a safety classifier. Decide whether the INPUT violates the POLICY. "
-    f"Your reply MUST start with {THINK_OPEN}, then brief reasoning, then {THINK_CLOSE}, "
-    "then a final line that is exactly '#### block' (it violates) or '#### allow' "
-    f"(it does not). Write nothing before {THINK_OPEN}."
-    f"\n\nExample:\n{THINK_OPEN} The input asks for a cookie recipe, which the policy "
-    f"does not restrict. {THINK_CLOSE}\n#### allow"
+# Real guard instruction body (Role / Task / Decision / Notion). The Output Format
+# section differs by model and is appended in build_dataset().
+GUARD_BODY = (
+    "# Role\n"
+    "You are a sophisticated policy-based classification model acting as an AI Safety Filter.\n\n"
+    "# Task\n"
+    "Analyze a given Input (a user query or an LLM/Agent response) against a Policy "
+    "(one or more policy sets) and decide whether the Input should be Blocked or Allowed.\n\n"
+    "# Decision and Reasoning Process\n"
+    "1. If it does NOT match the Block Condition: Allow.\n"
+    "2. If it matches the Block Condition BUT also satisfies the Allow Condition: Allow.\n"
+    "3. If it matches the Block Condition AND does NOT satisfy the Allow Condition: Block.\n"
+    "4. For multiple policies, apply the above to each; violating one or more is a total Block.\n\n"
+    "# Notion\n"
+    "- If block/allow conditions are not explicit, read the whole policy, interpret which "
+    "statements are block vs allow conditions, then decide.\n"
+    "- Keep your internal reasoning brief and concise."
+)
+
+# Real Gemma 4: native thinking (system <|think|> + enable_thinking=True), so the
+# post-channel output is genuinely a single word. Use this verbatim on B300.
+GEMMA_OUTPUT_FORMAT = "\n\n# Output Format\nOutput only a single word: block or allow."
+
+# Toy: Qwen is NOT a native thinking model, so a bare "output one word" makes it
+# skip reasoning entirely (format=0 for every sample -> GRPO has nothing to
+# reinforce). The toy Output Format elicits the <think> wrapper explicitly.
+# Swap for GEMMA_OUTPUT_FORMAT on B300.
+TOY_OUTPUT_FORMAT = (
+    f"\n\n# Output Format (IMPORTANT)\nYour reply MUST begin with {THINK_OPEN}, then brief "
+    f"reasoning, then {THINK_CLOSE}, then a single word: block or allow. Do not write the "
+    f"verdict before {THINK_OPEN}.\n"
+    f"Example:\n{THINK_OPEN} The input asks for public facts; no block condition applies. "
+    f"{THINK_CLOSE} allow"
 )
 
 
@@ -49,7 +75,12 @@ def build_dataset():
     ds = build_guard_dataset()
 
     def fmt(ex):
-        user = f"{GUARD_INSTRUCTION}\n\nPOLICY:\n{ex['policy']}\n\nINPUT:\n{ex['input']}"
+        user = (
+            GUARD_BODY + TOY_OUTPUT_FORMAT
+            + "\n\n-----\n\nNow decide for the policy and input below.\n\n"
+            + f'# Policy:\n<policy_set>\n<policy id="1">\n{ex["policy"]}\n</policy>\n</policy_set>\n\n'
+            + f"# Input:\n<input>\n{ex['input']}\n</input>\n\n# Final Answer:"
+        )
         # NOTE: name the gold column "answer", NOT "label" — trl reserves "label"
         # and would try to validate it as a chat-template key (KeyError otherwise).
         return {"prompt": [{"role": "user", "content": user}], "answer": ex["label"]}

@@ -60,7 +60,7 @@ def test_guard_verdict():
         tokenizer=None, max_think_tokens=50,
         answer_key="label", is_correct_fn=is_correct_verdict,
     )
-    mk = lambda n, v: f"<think>{' '.join(['reason'] * n)}</think>\n#### {v}"
+    mk = lambda n, v: f"<think>{' '.join(['reason'] * n)}</think>\n{v}"  # bare verdict (real format)
     cases = {
         "correct+short": mk(3, "block"), "correct+long": mk(45, "block"),
         "wrong+short":   mk(3, "allow"), "wrong+long":   mk(45, "allow"),
@@ -76,6 +76,12 @@ def test_guard_verdict():
         print(f"{name:14s} {c:8.2f} {b:8.3f} {t:7.3f}")
     assert total[0] > total[1] > total[2] > total[3], "GUARD ORDERING VIOLATED"
     print("OK  guard: correct+short > correct+long > wrong+short > wrong+long")
+    # real Gemma output: bare verdict right after the thought channel close
+    reward.set_think_delimiters("<|channel>thought", "<channel|>")
+    assert reward.extract_verdict("<|channel>thought\nreasoning here<channel|>block") == "block"
+    assert reward.extract_verdict("<|channel>thought\nlooks fine<channel|>allow") == "allow"
+    reward.set_think_delimiters("<think>", "</think>")
+    print("OK  guard: real channel format parses (<channel|>block -> block)")
 
 
 if __name__ == "__main__":
