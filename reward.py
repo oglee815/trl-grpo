@@ -98,6 +98,26 @@ def is_correct(pred_text: str, gold_text: str) -> bool:
         return p == g
 
 
+# --- AI-safety-guard task: block / allow verdict --------------------------
+_VERDICT_RE = re.compile(r"####\s*(block|allow)", re.IGNORECASE)
+
+
+def extract_verdict(text: str) -> Optional[str]:
+    """Pull a block/allow verdict from a guard model's final answer.
+    Prefers an explicit '#### block|allow' marker, else the last bare keyword."""
+    m = _VERDICT_RE.search(text)
+    if m:
+        return m.group(1).lower()
+    found = re.findall(r"\b(block|allow)\b", text, re.IGNORECASE)
+    return found[-1].lower() if found else None
+
+
+def is_correct_verdict(pred_text: str, gold_label: str) -> bool:
+    """Correctness for the guard task: predicted verdict == gold label."""
+    v = extract_verdict(pred_text)
+    return v is not None and v == str(gold_label).strip().lower()
+
+
 def count_think_tokens(think: str, tokenizer=None) -> int:
     """Token count of the thinking span. Falls back to whitespace words if no
     tokenizer is given (keeps unit tests dependency-free)."""
@@ -128,6 +148,7 @@ def build_reward_funcs(
     free_think_tokens: int = 0,
     wrong_answer_length_mode: str = "shorter_better",  # or "longer_better"
     answer_key: str = "answer",
+    is_correct_fn=None,   # task-specific correctness; e.g. is_correct_verdict for the guard
 ):
     """Returns (correctness_reward, brevity_reward, format_reward).
 
@@ -142,12 +163,14 @@ def build_reward_funcs(
         prefer shorter regardless of this flag.
     """
 
+    _correct = is_correct_fn or is_correct
+
     def correctness_reward(prompts=None, completions=None, **kwargs) -> List[float]:
         gold = kwargs[answer_key]
         out = []
         for comp, g in zip(completions, gold):
             text = extract_final_answer(get_completion_text(comp))
-            out.append(1.0 if is_correct(text, g) else 0.0)
+            out.append(1.0 if _correct(text, g) else 0.0)
         return out
 
     def brevity_reward(prompts=None, completions=None, **kwargs) -> List[float]:
@@ -162,7 +185,7 @@ def build_reward_funcs(
             norm = _length_norm(
                 count_think_tokens(think, tokenizer), max_think_tokens, free_think_tokens
             )
-            correct = is_correct(extract_final_answer(text), g)
+            correct = _correct(extract_final_answer(text), g)
             if correct or wrong_answer_length_mode == "shorter_better":
                 out.append(1.0 - norm)   # shorter -> higher
             else:

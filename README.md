@@ -59,6 +59,25 @@ ordering operating live. `check_format.py` pre-flights whether a model emits a
 closable think block before you spend a training run; `parse_log.py` tabulates a
 saved stdout log.
 
+## AI-safety-guard task (the real goal)
+Same lexicographic reward, task-specific correctness: given a POLICY + INPUT, the
+model thinks then outputs `block` (violates) / `allow`. Correctness = verdict
+matches the gold label (`reward.is_correct_verdict` / `extract_verdict`, plugged
+in via `build_reward_funcs(is_correct_fn=...)`). Toy data: `guard_data.py`
+(32 balanced examples across 5 policies). Train: `train_guard.py`.
+
+```powershell
+$env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
+$env:NUM_GEN="8"; $env:MAX_STEPS="30"; $env:LR="1e-5"; $env:TEMP="0.7"; $env:MAX_COMPLETION="512"
+.\.venv\Scripts\python.exe train_guard.py
+```
+Observed: the model first *shortcuts* (emits `#### allow` with no reasoning,
+`format≈0.25`); GRPO then drives `format 0.25→1.0` within ~5 steps and converges
+to "brief think + correct verdict" (`correctness≈1.0`, `brevity≈0.88`,
+`reward≈1.64`) — the think-then-answer behavior the task wants.
+Gotcha: name the gold column `answer`, **not** `label` — trl reserves `label`
+and validates it as a chat-template key (KeyError otherwise).
+
 ## B300 (Linux) real run — checklist
 - `MODEL_NAME = "google/gemma-4-E2B-it"` (smallest Gemma 4; E4B for more quality).
 - In `train_grpo.py`, call once: `reward.set_think_delimiters("<|channel>thought", "<channel|>")`

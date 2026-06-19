@@ -52,7 +52,34 @@ def test_gemma4_channel_format():
     reward.set_think_delimiters("<think>", "</think>")  # reset
 
 
+def test_guard_verdict():
+    # AI-safety-guard task: correctness = predicted block/allow matches gold.
+    from reward import is_correct_verdict
+    reward.set_think_delimiters("<think>", "</think>")
+    correctness, brevity, fmt = build_reward_funcs(
+        tokenizer=None, max_think_tokens=50,
+        answer_key="label", is_correct_fn=is_correct_verdict,
+    )
+    mk = lambda n, v: f"<think>{' '.join(['reason'] * n)}</think>\n#### {v}"
+    cases = {
+        "correct+short": mk(3, "block"), "correct+long": mk(45, "block"),
+        "wrong+short":   mk(3, "allow"), "wrong+long":   mk(45, "allow"),
+    }
+    comps, gold = list(cases.values()), ["block"] * 4
+    cr = correctness(completions=comps, label=gold)
+    br = brevity(completions=comps, label=gold)
+    fr = fmt(completions=comps, label=gold)
+    total = [W_C * c + W_B * b + W_F * f for c, b, f in zip(cr, br, fr)]
+    print("\n[guard block/allow]")
+    print(f"{'case':14s} {'correct':>8s} {'brevity':>8s} {'TOTAL':>7s}")
+    for name, c, b, t in zip(cases, cr, br, total):
+        print(f"{name:14s} {c:8.2f} {b:8.3f} {t:7.3f}")
+    assert total[0] > total[1] > total[2] > total[3], "GUARD ORDERING VIOLATED"
+    print("OK  guard: correct+short > correct+long > wrong+short > wrong+long")
+
+
 if __name__ == "__main__":
     test_toy_format()
     test_gemma4_channel_format()
+    test_guard_verdict()
     print("\nALL OK")

@@ -2,8 +2,8 @@
 .venv/
 
 # training outputs & run artifacts
-out-grpo-toy/
-run_log*.txt
+out-grpo-*/
+run_*.txt
 
 # python
 __pycache__/
