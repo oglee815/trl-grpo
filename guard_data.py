@@ -1,15 +1,19 @@
-"""Toy dataset for the AI-safety-guard task, aligned to the real prompt format.
+"""Toy / real dataset for the AI-safety-guard task.
 
-Each policy has an explicit Block Condition and an Allow Condition (exception),
-matching the real decision process:
-    matches Block AND NOT Allow  -> block
-    matches Block BUT also Allow -> allow
-    no Block match               -> allow
+Canonical schema (one example):
+    policies : list[str]   one or more policy texts (Block/Allow conditions ideally)
+    input    : str         the text to classify (user query or LLM/Agent response)
+    label    : "block" | "allow"   gold consolidated verdict
 
-Inputs are *requests to be classified* (what the guard sees), not harmful content
-itself. The set deliberately includes "block-topic but allow-exception" cases so
-the model has to actually reason, not pattern-match a keyword.
+GRPO needs ONLY these — no gold reasoning/CoT (the model generates its own and is
+rewarded on correctness + brevity). Real data goes in a JSONL file, one object per
+line, with `policies` (list) or `policy` (single str), `input`, and `label`.
+
+    from guard_data import get_guard_dataset
+    ds = get_guard_dataset("guard_train.jsonl")   # or None -> built-in toy set
 """
+import json
+
 from datasets import Dataset
 
 POLICIES = {
@@ -82,16 +86,61 @@ EXAMPLES = [
 ]
 
 
+def _normalize(row: dict) -> dict:
+    """Coerce a raw row into {policies: list[str], input: str, label: str} and
+    validate. Accepts `policies` (list or str) or `policy` (str)."""
+    pols = row.get("policies")
+    if pols is None:
+        pols = [row["policy"]] if row.get("policy") else []
+    if isinstance(pols, str):
+        pols = [pols]
+    pols = [str(p).strip() for p in pols if str(p).strip()]
+
+    inp = row.get("input")
+    label = str(row.get("label", "")).strip().lower()
+    if not inp or not str(inp).strip():
+        raise ValueError(f"example is missing 'input': {row!r}")
+    if not pols:
+        raise ValueError(f"example has no 'policy'/'policies': {row!r}")
+    if label not in ("block", "allow"):
+        raise ValueError(f"label must be 'block' or 'allow', got {label!r}: {row!r}")
+    return {"policies": pols, "input": str(inp).strip(), "label": label}
+
+
 def build_guard_dataset(n: int = None) -> Dataset:
+    """Built-in toy set (single policy each, wrapped into a 1-element list)."""
     rows = EXAMPLES if n is None else EXAMPLES[:n]
-    return Dataset.from_list(
-        [{"policy": POLICIES[k], "input": inp, "label": lab} for (k, inp, lab) in rows]
-    )
+    data = [_normalize({"policy": POLICIES[k], "input": inp, "label": lab})
+            for (k, inp, lab) in rows]
+    return Dataset.from_list(data)
+
+
+def load_guard_jsonl(path: str) -> Dataset:
+    """Load real data from a JSONL file (one object per line) with fields
+    `input`, `label`, and `policies` (list[str]) or `policy` (str)."""
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(_normalize(json.loads(line)))
+            except Exception as e:
+                raise ValueError(f"{path}:{i}: {e}") from e
+    if not rows:
+        raise ValueError(f"no examples loaded from {path}")
+    return Dataset.from_list(rows)
+
+
+def get_guard_dataset(path: str = None) -> Dataset:
+    """JSONL file if `path` is given, else the built-in toy set."""
+    return load_guard_jsonl(path) if path else build_guard_dataset()
 
 
 if __name__ == "__main__":
     ds = build_guard_dataset()
-    n_block = sum(1 for e in EXAMPLES if e[2] == "block")
-    print(f"{len(ds)} examples  ({n_block} block / {len(ds) - n_block} allow)")
-    print(ds[0]["policy"][:80], "...")
-    print("input:", ds[0]["input"], "->", ds[0]["label"])
+    n_block = sum(1 for r in ds if r["label"] == "block")
+    print(f"toy: {len(ds)} examples  ({n_block} block / {len(ds) - n_block} allow)")
+    print("schema:", {k: type(v).__name__ for k, v in ds[0].items()})
+    print("example:", ds[0]["policies"][0][:60], "... ->", ds[0]["label"])

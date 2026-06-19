@@ -80,6 +80,17 @@ Observed: policy-grounded reasoning in the think block then a bare `block`/`allo
 since the allow-exception cases are genuinely harder. Reward tracks the 4-way
 design (correct+concise ≈ 1.65, drops to ~1.4 when wrong).
 
+Real data: drop examples into a JSONL file — fields `input`, `label`
+(`block`/`allow`), and `policies` (list[str]) or `policy` (str); see
+[guard_sample.jsonl](guard_sample.jsonl). Point training at it with
+`GUARD_DATA=path` (multiple `<policy>` per example is rendered into the
+`<policy_set>`). GRPO needs **no gold reasoning** — only the verdict label.
+
+```powershell
+$env:GUARD_DATA="guard_train.jsonl"; $env:MODEL_NAME="Qwen/Qwen2.5-1.5B-Instruct"; $env:USE_LORA="1"
+.\.venv\Scripts\python.exe train_guard.py
+```
+
 Two gotchas:
 - Gold column must be `answer`, **not** `label` — trl reserves `label` (KeyError otherwise).
 - On a non-thinking toy model (Qwen), the verbatim real instruction "Output only a

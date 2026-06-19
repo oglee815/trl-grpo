@@ -20,10 +20,11 @@ from transformers import AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
 
 from reward import build_reward_funcs, is_correct_verdict, THINK_OPEN, THINK_CLOSE
-from guard_data import build_guard_dataset
+from guard_data import get_guard_dataset
 
 # --- Config (toy defaults) -------------------------------------------------
 MODEL_NAME = os.environ.get("MODEL_NAME", "google/gemma-3-270m-it")
+GUARD_DATA = os.environ.get("GUARD_DATA", "")  # path to a JSONL file; empty = built-in toy set
 MAX_THINK_TOKENS = int(os.environ.get("MAX_THINK", "256"))
 USE_VLLM = False
 USE_LORA = os.environ.get("USE_LORA", "0") == "1"
@@ -71,14 +72,19 @@ TOY_OUTPUT_FORMAT = (
 )
 
 
+def _render_policy_set(policies):
+    items = "\n".join(f'<policy id="{i}">\n{p}\n</policy>' for i, p in enumerate(policies, 1))
+    return f"<policy_set>\n{items}\n</policy_set>"
+
+
 def build_dataset():
-    ds = build_guard_dataset()
+    ds = get_guard_dataset(GUARD_DATA or None)
 
     def fmt(ex):
         user = (
             GUARD_BODY + TOY_OUTPUT_FORMAT
             + "\n\n-----\n\nNow decide for the policy and input below.\n\n"
-            + f'# Policy:\n<policy_set>\n<policy id="1">\n{ex["policy"]}\n</policy>\n</policy_set>\n\n'
+            + f"# Policy:\n{_render_policy_set(ex['policies'])}\n\n"
             + f"# Input:\n<input>\n{ex['input']}\n</input>\n\n# Final Answer:"
         )
         # NOTE: name the gold column "answer", NOT "label" — trl reserves "label"
