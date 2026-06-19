@@ -102,7 +102,12 @@ bash train.sh --model /path/to/gemma-4-E2B-it --data dataset/guard_train.jsonl \
 `enable_thinking=True` → system `<|think|>`, verbatim single-word output); channel
 delimiters `<|channel>thought` / `<channel|>` are the defaults. `num_generations`
 must divide `gpus*batch*accum`. (If completions come out empty/garbled with
-gradient checkpointing, add `--no_grad_ckpt`.)
+gradient checkpointing, add `--no_grad_ckpt`.) In `--native` mode brevity is
+measured over the **whole completion length** — Gemma's thought-channel delimiters
+are special tokens that trl strips at decode, so a `<think>` block can't be parsed
+in the reward — and `max_think_tokens` is auto-raised to `max_completion_length`
+(otherwise long completions all saturate brevity to 0 → no reward variance →
+`loss=0`). The verdict is still parsed (it's the last `block`/`allow` word).
 
 Two gotchas:
 - Gold column must be `answer`, **not** `label` — trl reserves `label` (KeyError otherwise).

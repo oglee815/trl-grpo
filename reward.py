@@ -103,14 +103,15 @@ _VERDICT_RE = re.compile(r"####\s*(block|allow)", re.IGNORECASE)
 
 
 def extract_verdict(text: str) -> Optional[str]:
-    """Pull a block/allow verdict. The real Gemma format puts the bare word right
-    after the thought channel ('<channel|>block'); the toy puts it after
-    '</think>'. So prefer the FIRST keyword in the post-think tail, then a
-    '#### block|allow' marker, then the last keyword anywhere."""
+    """Pull the block/allow verdict — the LAST such word in the post-think tail
+    (the final answer comes after the reasoning), then a '#### block|allow' marker,
+    then the last keyword anywhere. Taking the *last* word matters in native mode,
+    where the think delimiters are stripped so the whole completion is the tail and
+    the reasoning itself may mention 'block'/'allow'."""
     tail = extract_final_answer(text)
-    m = re.search(r"\b(block|allow)\b", tail, re.IGNORECASE)
-    if m:
-        return m.group(1).lower()
+    found = re.findall(r"\b(block|allow)\b", tail, re.IGNORECASE)
+    if found:
+        return found[-1].lower()
     m = _VERDICT_RE.search(text)
     if m:
         return m.group(1).lower()
@@ -155,6 +156,10 @@ def build_reward_funcs(
     wrong_answer_length_mode: str = "shorter_better",  # or "longer_better"
     answer_key: str = "answer",
     is_correct_fn=None,   # task-specific correctness; e.g. is_correct_verdict for the guard
+    length_source: str = "think",   # "think": measure the <think> block.
+                                    # "completion": measure the whole completion — use when
+                                    # the model's think delimiters are special tokens that
+                                    # trl strips at decode (e.g. Gemma's <|channel>thought).
 ):
     """Returns (correctness_reward, brevity_reward, format_reward).
 
@@ -184,18 +189,16 @@ def build_reward_funcs(
         out = []
         for comp, g in zip(completions, gold):
             text = get_completion_text(comp)
-            think = extract_thinking(text)
-            if not think:  # missing OR empty think block -> no brevity bonus
-                out.append(0.0)
-                continue
-            norm = _length_norm(
-                count_think_tokens(think, tokenizer), max_think_tokens, free_think_tokens
-            )
-            correct = _correct(extract_final_answer(text), g)
-            if correct or wrong_answer_length_mode == "shorter_better":
-                out.append(1.0 - norm)   # shorter -> higher
+            if length_source == "completion":
+                span = text          # whole completion ≈ reasoning (+ a one-word verdict)
             else:
-                out.append(norm)         # wrong & longer_better -> longer wins
+                span = extract_thinking(text)
+                if not span:         # missing/empty think block -> no brevity bonus
+                    out.append(0.0)
+                    continue
+            norm = _length_norm(count_think_tokens(span, tokenizer), max_think_tokens, free_think_tokens)
+            correct = _correct(extract_final_answer(text), g)
+            out.append((1.0 - norm) if (correct or wrong_answer_length_mode == "shorter_better") else norm)
         return out
 
     def format_reward(prompts=None, completions=None, **kwargs) -> List[float]:

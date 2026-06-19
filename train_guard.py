@@ -154,15 +154,29 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
 
+    eff_max_think = guard_args.max_think_tokens
+    fmt_weight = guard_args.format_weight
+    if guard_args.native_thinking:
+        # Native-thinking models emit the thought channel with SPECIAL tokens, which
+        # trl strips when decoding completions -> the <think> block can't be parsed.
+        # Measure brevity over the whole completion instead, and drop the format
+        # reward (a closable think block is neither observable nor needed here).
+        fmt_weight = 0.0
+        if eff_max_think < training_args.max_completion_length:
+            eff_max_think = training_args.max_completion_length
+            print(f"[guard] native: max_think_tokens -> {eff_max_think} "
+                  f"(= max_completion_length) so brevity spans the full length range", flush=True)
+
     correctness, brevity, fmt = build_reward_funcs(
         tokenizer=tokenizer,
-        max_think_tokens=guard_args.max_think_tokens,
+        max_think_tokens=eff_max_think,
         wrong_answer_length_mode=guard_args.wrong_answer_length_mode,
         answer_key="answer",
         is_correct_fn=is_correct_verdict,
+        length_source="completion" if guard_args.native_thinking else "think",
     )
     reward_funcs = [correctness, brevity, fmt]
-    training_args.reward_weights = [1.0, guard_args.brevity_weight, guard_args.format_weight]
+    training_args.reward_weights = [1.0, guard_args.brevity_weight, fmt_weight]
 
     if guard_args.dump_completions:
         _seen = []
