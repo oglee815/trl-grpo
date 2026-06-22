@@ -33,6 +33,7 @@ dtype="bfloat16"
 use_peft=false
 grad_ckpt=true                   # if GRPO completions come out empty/garbled, set false
 dump=false                       # --dump: print one group of completions once (diagnostic)
+dump_every=0                     # --dump_every N: print a group every N reward batches
 output_base="${OUTPUT_BASE:-./output}"
 
 while [[ "$#" -gt 0 ]]; do
@@ -60,6 +61,7 @@ while [[ "$#" -gt 0 ]]; do
     --use_peft) use_peft=true ;;
     --no_grad_ckpt) grad_ckpt=false ;;
     --dump) dump=true ;;
+    --dump_every) dump=true; dump_every="$2"; shift ;;
     *) echo "Unknown parameter: $1"; exit 1 ;;
   esac
   shift
@@ -76,7 +78,7 @@ extra=()
 $native    && extra+=(--native_thinking)
 $grad_ckpt && extra+=(--gradient_checkpointing)
 $use_peft  && extra+=(--use_peft --lora_r 16 --lora_alpha 32 --lora_target_modules all-linear)
-$dump      && extra+=(--dump_completions)
+$dump      && extra+=(--dump_completions --dump_every "${dump_every}")
 
 echo "output_dir=${output_dir}"
 torchrun --nproc_per_node="${gpus}" train_guard.py \

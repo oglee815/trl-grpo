@@ -37,7 +37,8 @@ class GuardArgs:
     native_thinking: bool = field(default=False, metadata={
         "help": "Gemma native thought channel: pre-render the prompt with "
                 "enable_thinking=True and use the verbatim single-word output format"})
-    dump_completions: bool = field(default=False, metadata={"help": "print completion[0] once (debug)"})
+    dump_completions: bool = field(default=False, metadata={"help": "dump one group of completions (debug)"})
+    dump_every: int = field(default=0, metadata={"help": "dump every N reward batches; 0 = once at start"})
 
 
 GUARD_BODY = (
@@ -180,30 +181,34 @@ def main():
     training_args.reward_weights = [1.0, guard_args.brevity_weight, fmt_weight]
 
     if guard_args.dump_completions:
-        _seen = []
+        _calls = [0]
         n_gen = training_args.num_generations
+        every = guard_args.dump_every
 
         def debug_dump(prompts=None, completions=None, **kwargs):
-            # First call on rank 0: dump ONE whole group (num_generations completions
-            # of the SAME prompt). If the texts differ but verdict/length are uniform,
-            # it's reward saturation (-> need harder data); if the texts are nearly
-            # identical, it's entropy collapse.
-            if _seen or int(os.environ.get("RANK", "0")) != 0:
+            # Dump one whole group (num_generations completions of the SAME prompt) on
+            # rank 0 — once at start (dump_every=0) or every N reward batches. If the
+            # texts differ but verdict/length are uniform it's reward saturation (->
+            # need harder data); if the texts are near-identical it's entropy collapse.
+            if int(os.environ.get("RANK", "0")) != 0:
+                return [0.0] * len(completions)
+            i = _calls[0]
+            _calls[0] += 1
+            if not ((i == 0) if every <= 0 else (i % every == 0)):
                 return [0.0] * len(completions)
             gold = kwargs.get("answer", [None] * len(completions))
             n = min(n_gen, len(completions))
             p = prompts[0]
             ptxt = p if isinstance(p, str) else (p[-1].get("content", "") if isinstance(p, list) and p else str(p))
             print("\n" + "=" * 72)
-            print(f"[dump] one group of {n} completions for the SAME prompt | gold={gold[0]}")
+            print(f"[dump] batch {i}: one group of {n} completions | gold={gold[0]}")
             print(f"[dump] prompt tail: ...{ptxt[-160:]!r}")
-            for i in range(n):
-                t = get_completion_text(completions[i])
-                ok = is_correct_verdict(t, gold[i]) if gold[i] is not None else "?"
-                print(f"  [{i:02d}] tok={count_think_tokens(t, tokenizer):>4} "
+            for j in range(n):
+                t = get_completion_text(completions[j])
+                ok = is_correct_verdict(t, gold[j]) if gold[j] is not None else "?"
+                print(f"  [{j:02d}] tok={count_think_tokens(t, tokenizer):>4} "
                       f"verdict={extract_verdict(t)} correct={ok} | {t[:110]!r}")
             print("=" * 72, flush=True)
-            _seen.append(1)
             return [0.0] * len(completions)
 
         reward_funcs.append(debug_dump)
