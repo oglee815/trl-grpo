@@ -39,6 +39,7 @@ class GuardArgs:
                 "enable_thinking=True and use the verbatim single-word output format"})
     dump_completions: bool = field(default=False, metadata={"help": "dump one group of completions (debug)"})
     dump_every: int = field(default=0, metadata={"help": "dump every N reward batches; 0 = once at start"})
+    dump_chars: int = field(default=0, metadata={"help": "chars of each completion to print; 0 = full text"})
 
 
 GUARD_BODY = (
@@ -206,8 +207,9 @@ def main():
             for j in range(n):
                 t = get_completion_text(completions[j])
                 ok = is_correct_verdict(t, gold[j]) if gold[j] is not None else "?"
-                print(f"  [{j:02d}] tok={count_think_tokens(t, tokenizer):>4} "
-                      f"verdict={extract_verdict(t)} correct={ok} | {t[:110]!r}")
+                print(f"\n----- [{j:02d}] tok={count_think_tokens(t, tokenizer)} "
+                      f"verdict={extract_verdict(t)} correct={ok} -----")
+                print(t if guard_args.dump_chars <= 0 else t[:guard_args.dump_chars])
             print("=" * 72, flush=True)
             return [0.0] * len(completions)
 
