@@ -12,6 +12,7 @@ multi-GPU. Launch via train.sh, or directly:
 B300 / Gemma 4: add  --native_thinking --think_open "<|channel>thought" \
       --think_close "<channel|>" --attn_implementation flash_attention_2
 """
+import os
 from dataclasses import dataclass, field
 
 from transformers import AutoTokenizer
@@ -19,7 +20,7 @@ from trl import GRPOConfig, GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 
 import reward as reward_mod
 from reward import (build_reward_funcs, is_correct_verdict, get_completion_text,
-                    extract_verdict)
+                    extract_verdict, count_think_tokens)
 from guard_data import get_guard_dataset
 
 
@@ -180,13 +181,29 @@ def main():
 
     if guard_args.dump_completions:
         _seen = []
+        n_gen = training_args.num_generations
 
         def debug_dump(prompts=None, completions=None, **kwargs):
-            if not _seen:
-                t = get_completion_text(completions[0])
-                print("\n[DEBUG] completion[0]:", repr(t[:800]),
-                      "-> verdict", extract_verdict(t), "\n", flush=True)
-                _seen.append(1)
+            # First call on rank 0: dump ONE whole group (num_generations completions
+            # of the SAME prompt). If the texts differ but verdict/length are uniform,
+            # it's reward saturation (-> need harder data); if the texts are nearly
+            # identical, it's entropy collapse.
+            if _seen or int(os.environ.get("RANK", "0")) != 0:
+                return [0.0] * len(completions)
+            gold = kwargs.get("answer", [None] * len(completions))
+            n = min(n_gen, len(completions))
+            p = prompts[0]
+            ptxt = p if isinstance(p, str) else (p[-1].get("content", "") if isinstance(p, list) and p else str(p))
+            print("\n" + "=" * 72)
+            print(f"[dump] one group of {n} completions for the SAME prompt | gold={gold[0]}")
+            print(f"[dump] prompt tail: ...{ptxt[-160:]!r}")
+            for i in range(n):
+                t = get_completion_text(completions[i])
+                ok = is_correct_verdict(t, gold[i]) if gold[i] is not None else "?"
+                print(f"  [{i:02d}] tok={count_think_tokens(t, tokenizer):>4} "
+                      f"verdict={extract_verdict(t)} correct={ok} | {t[:110]!r}")
+            print("=" * 72, flush=True)
+            _seen.append(1)
             return [0.0] * len(completions)
 
         reward_funcs.append(debug_dump)
