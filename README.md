@@ -136,7 +136,7 @@ Two gotchas:
   fallback can score garbled output as correct).
 
 
-### dd
+### Example
 
 ```
 ----- [01] tok=537 verdict=allow correct=True -----
