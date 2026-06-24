@@ -39,6 +39,9 @@ dump_every=0                     # --dump_every N: print a group every N reward 
 dump_chars=0                     # --dump_chars N: chars per completion (0 = full text)
 output_base="${OUTPUT_BASE:-./output}"
 
+# a boolean switch may be given bare (--native) or with a value (--native true|false)
+is_bool() { [[ "${1:-}" == "true" || "${1:-}" == "false" ]]; }
+
 while [[ "$#" -gt 0 ]]; do
   case $1 in
     --model) model="$2"; shift ;;
@@ -62,10 +65,10 @@ while [[ "$#" -gt 0 ]]; do
     --think_close) think_close="$2"; shift ;;
     --attn) attn="$2"; shift ;;
     --dtype) dtype="$2"; shift ;;
-    --native) native=true ;;
-    --use_peft) use_peft=true ;;
+    --native)   if is_bool "${2:-}"; then native="$2";   shift; else native=true;   fi ;;
+    --use_peft) if is_bool "${2:-}"; then use_peft="$2"; shift; else use_peft=true; fi ;;
     --no_grad_ckpt) grad_ckpt=false ;;
-    --dump) dump=true ;;
+    --dump)     if is_bool "${2:-}"; then dump="$2";     shift; else dump=true;     fi ;;
     --dump_every) dump=true; dump_every="$2"; shift ;;
     --dump_chars) dump=true; dump_chars="$2"; shift ;;
     *) echo "Unknown parameter: $1"; exit 1 ;;
