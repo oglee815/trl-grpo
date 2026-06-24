@@ -11,6 +11,10 @@ rule **`w_c > w_b`** (so brevity can never flip a correct/incorrect ranking). Se
 [reward.py](reward.py); the 4-way ordering is asserted in [test_reward.py](test_reward.py)
 for both the toy `<think>` format and the real Gemma 4 thought-channel format.
 
+## How it works
+
+![GRPO guard training flow](docs/grpo_flow.svg)
+
 ## Files
 - `reward.py` — parsing + 3 reward fns (correctness / brevity / format). `set_think_delimiters()` switches formats.
 - `test_reward.py` — proves the ordering (no GPU/torch needed): `python test_reward.py`

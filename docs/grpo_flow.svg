@@ -1,0 +1,74 @@
+<svg viewBox="0 0 800 1000" width="800" height="1000" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif" role="img">
+<title>GRPO로 AI Safety Guard를 학습하는 전체 과정</title>
+<desc>입력(정책+대상) → 프롬프트 구성 → 한 프롬프트로 16개 답안 생성(그룹) → 각 답안 보상 채점 → 그룹 안에서 비교해 Advantage 계산(GRPO 핵심) → 정책 업데이트 → 반복.</desc>
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0 0 L10 5 L0 10 z" fill="#888780"/>
+</marker>
+</defs>
+
+<rect x="0" y="0" width="800" height="1000" rx="14" fill="#ffffff"/>
+
+<text x="386" y="44" text-anchor="middle" fill="#2C2C2A" style="font-size:23px;font-weight:600">GRPO로 AI Safety Guard 학습하기</text>
+<text x="386" y="70" text-anchor="middle" fill="#5F5E5A" style="font-size:13.5px">정책 위반 여부(block / allow)를 스스로 판단하도록 강화학습</text>
+
+<rect x="248" y="86" width="12" height="12" rx="2" fill="#D3D1C7" stroke="#B4B2A9"/>
+<text x="266" y="96" fill="#5F5E5A" style="font-size:12px">후보 만들기</text>
+<rect x="358" y="86" width="12" height="12" rx="2" fill="#9FE1CB" stroke="#5DCAA5"/>
+<text x="376" y="96" fill="#5F5E5A" style="font-size:12px">GRPO 학습</text>
+
+<rect x="180" y="118" width="412" height="118" rx="12" fill="#F1EFE8" stroke="#C7C4B8"/>
+<circle cx="150" cy="177" r="18" fill="#D3D1C7" stroke="#B4B2A9"/>
+<text x="150" y="183" text-anchor="middle" fill="#2C2C2A" style="font-size:16px;font-weight:600">1</text>
+<text x="206" y="166" fill="#2C2C2A" style="font-size:16px;font-weight:600">입력 — 정책 + 검사 대상</text>
+<text x="206" y="194" fill="#5F5E5A" style="font-size:12.5px">차단·허용 조건이 담긴 Policy 와 검사할 Input</text>
+
+<rect x="180" y="262" width="412" height="118" rx="12" fill="#F1EFE8" stroke="#C7C4B8"/>
+<circle cx="150" cy="321" r="18" fill="#D3D1C7" stroke="#B4B2A9"/>
+<text x="150" y="327" text-anchor="middle" fill="#2C2C2A" style="font-size:16px;font-weight:600">2</text>
+<text x="206" y="310" fill="#2C2C2A" style="font-size:16px;font-weight:600">프롬프트 구성</text>
+<text x="206" y="338" fill="#5F5E5A" style="font-size:12.5px">Gemma 채널 포맷으로 감싸기 (생각 켜기)</text>
+
+<rect x="180" y="406" width="412" height="118" rx="12" fill="#F1EFE8" stroke="#C7C4B8"/>
+<circle cx="150" cy="465" r="18" fill="#D3D1C7" stroke="#B4B2A9"/>
+<text x="150" y="471" text-anchor="middle" fill="#2C2C2A" style="font-size:16px;font-weight:600">3</text>
+<text x="206" y="448" fill="#2C2C2A" style="font-size:16px;font-weight:600">16개 답안 생성 — 한 그룹</text>
+<text x="206" y="475" fill="#5F5E5A" style="font-size:12.5px">같은 프롬프트로 16가지</text>
+<text x="206" y="494" fill="#5F5E5A" style="font-size:12.5px">추론 + 판정 생성</text>
+<rect x="486" y="437" width="62" height="42" rx="6" fill="#ffffff" stroke="#B4B2A9"/>
+<rect x="494" y="445" width="62" height="42" rx="6" fill="#ffffff" stroke="#B4B2A9"/>
+<rect x="502" y="453" width="62" height="42" rx="6" fill="#ffffff" stroke="#888780"/>
+<text x="533" y="478" text-anchor="middle" fill="#5F5E5A" style="font-size:12px;font-weight:600">×16</text>
+
+<rect x="180" y="550" width="412" height="118" rx="12" fill="#E1F5EE" stroke="#5DCAA5"/>
+<circle cx="150" cy="609" r="18" fill="#9FE1CB" stroke="#5DCAA5"/>
+<text x="150" y="615" text-anchor="middle" fill="#04342C" style="font-size:16px;font-weight:600">4</text>
+<text x="206" y="582" fill="#04342C" style="font-size:16px;font-weight:600">각 답안 채점 — 보상</text>
+<text x="206" y="608" fill="#0F6E56" style="font-size:12.5px;font-family:ui-monospace,Consolas,monospace">reward = 1·정답 + 0.5·간결 + 0.2·형식</text>
+<text x="206" y="632" fill="#0F6E56" style="font-size:12px">정답+짧음 ＞ 정답+긺 ＞ 오답+짧음 ＞ 오답+긺</text>
+
+<rect x="180" y="694" width="412" height="118" rx="12" fill="#0F6E56" stroke="#0A5A45"/>
+<circle cx="150" cy="753" r="18" fill="#0F6E56" stroke="#0A5A45"/>
+<text x="150" y="759" text-anchor="middle" fill="#E1F5EE" style="font-size:16px;font-weight:600">5</text>
+<rect x="470" y="704" width="112" height="22" rx="11" fill="#9FE1CB"/>
+<text x="526" y="719" text-anchor="middle" fill="#04342C" style="font-size:11.5px;font-weight:600">GRPO 핵심</text>
+<text x="206" y="726" fill="#E1F5EE" style="font-size:16px;font-weight:600">그룹 안에서 비교 → Advantage</text>
+<text x="206" y="752" fill="#9FE1CB" style="font-size:12.5px;font-family:ui-monospace,Consolas,monospace">advantage = (보상 − 그룹평균) ÷ 표준편차</text>
+<text x="206" y="776" fill="#CDEFE4" style="font-size:12px">그룹 내 '차이'로만 학습 — 다 같으면 0 (학습 멈춤)</text>
+
+<rect x="180" y="838" width="412" height="118" rx="12" fill="#E1F5EE" stroke="#5DCAA5"/>
+<circle cx="150" cy="897" r="18" fill="#9FE1CB" stroke="#5DCAA5"/>
+<text x="150" y="903" text-anchor="middle" fill="#04342C" style="font-size:16px;font-weight:600">6</text>
+<text x="206" y="880" fill="#04342C" style="font-size:16px;font-weight:600">정책 업데이트</text>
+<text x="206" y="906" fill="#0F6E56" style="font-size:12.5px">좋은 답안 ↑ · 나쁜 답안 ↓</text>
+<text x="206" y="930" fill="#0F6E56" style="font-size:12px">→ "정답은 유지하면서 더 짧게" 학습</text>
+
+<line x1="386" y1="236" x2="386" y2="259" stroke="#888780" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="386" y1="380" x2="386" y2="403" stroke="#888780" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="386" y1="524" x2="386" y2="547" stroke="#888780" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="386" y1="668" x2="386" y2="691" stroke="#888780" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="386" y1="812" x2="386" y2="835" stroke="#888780" stroke-width="2" marker-end="url(#arr)"/>
+
+<path d="M592 897 C702 888 702 186 594 177" fill="none" stroke="#888780" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+<text transform="translate(728,537) rotate(90)" text-anchor="middle" fill="#5F5E5A" style="font-size:12px">반복 · 수천 프롬프트 × 여러 epoch</text>
+</svg>
