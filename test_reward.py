@@ -116,9 +116,32 @@ def test_target_length_mode():
     reward.set_think_delimiters("<think>", "</think>")
 
 
+def test_policy_scaled_length():
+    """target_ratio>0: the target reasoning length scales with policy length, so
+    the SAME reasoning is rewarded MORE under a long policy (which warrants long
+    reasoning) than under a short policy (which should be read concisely)."""
+    from reward import is_correct_verdict
+    reward.set_think_delimiters("<think>", "</think>")
+    correctness, brevity, fmt = build_reward_funcs(
+        tokenizer=None, max_think_tokens=200,
+        target_ratio=0.5, tolerance_ratio=1.0,   # target=0.5*policy_len, tol=1.0*policy_len
+        answer_key="label", is_correct_fn=is_correct_verdict,
+    )
+    comp = f"<think>{' '.join(['reason'] * 40)}</think>\nblock"   # 40-token reasoning (correct)
+    br_long = brevity(completions=[comp], label=["block"], policy_len=[80])   # target=40 -> hit
+    br_short = brevity(completions=[comp], label=["block"], policy_len=[20])  # target=10 -> far
+    print("\n[policy-scaled length]")
+    print(f"  same 40-tok reasoning:  long-policy(len=80,target=40) brevity={br_long[0]:.3f}")
+    print(f"                          short-policy(len=20,target=10) brevity={br_short[0]:.3f}")
+    assert br_long[0] > br_short[0], "POLICY-SCALED TARGET VIOLATED"
+    print("OK  policy-scaled: longer policy rewards longer reasoning more than a short policy does")
+    reward.set_think_delimiters("<think>", "</think>")
+
+
 if __name__ == "__main__":
     test_toy_format()
     test_gemma4_channel_format()
     test_guard_verdict()
     test_target_length_mode()
+    test_policy_scaled_length()
     print("\nALL OK")

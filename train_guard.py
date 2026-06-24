@@ -36,6 +36,11 @@ class GuardArgs:
     length_tolerance: int = field(default=0, metadata={
         "help": "tokens away from target_length where that reward hits 0; "
                 "0 = use max_think_tokens"})
+    target_ratio: float = field(default=0.0, metadata={
+        "help": "if >0, per-example target = target_ratio * policy tokens "
+                "(scale the reasoning budget with policy length); overrides target_length"})
+    tolerance_ratio: float = field(default=0.0, metadata={
+        "help": "if >0, per-example tolerance = tolerance_ratio * policy tokens"})
     wrong_answer_length_mode: str = field(default="shorter_better",
                                           metadata={"help": "shorter_better | longer_better"})
     think_open: str = "<think>"
@@ -90,20 +95,23 @@ def build_dataset(tokenizer, ga: GuardArgs):
     out_fmt = GEMMA_OUTPUT_FORMAT if ga.native_thinking else toy_output_format(ga.think_open, ga.think_close)
 
     def fmt(ex):
+        policy_str = _render_policy_set(ex["policies"])
         user = (
             GUARD_BODY + out_fmt
             + "\n\n-----\n\nNow decide for the policy and input below.\n\n"
-            + f"# Policy:\n{_render_policy_set(ex['policies'])}\n\n"
+            + f"# Policy:\n{policy_str}\n\n"
             + f"# Input:\n<input>\n{ex['input']}\n</input>\n\n# Final Answer:"
         )
+        # policy token length -> used by the policy-scaled target/tolerance reward
+        policy_len = len(tokenizer.encode("\n".join(ex["policies"]), add_special_tokens=False))
         messages = [{"role": "user", "content": user}]
         if ga.native_thinking:
             # Pre-render so the system turn carries <|think|>. trl tokenizes prompt
             # strings with add_special_tokens=False, so no double BOS.
             prompt = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
-            return {"prompt": prompt, "answer": ex["label"]}
-        return {"prompt": messages, "answer": ex["label"]}  # conversational (toy)
+            return {"prompt": prompt, "answer": ex["label"], "policy_len": policy_len}
+        return {"prompt": messages, "answer": ex["label"], "policy_len": policy_len}  # toy
 
     return ds.map(fmt, remove_columns=ds.column_names)
 
@@ -181,12 +189,19 @@ def main():
         max_think_tokens=eff_max_think,
         target_length=guard_args.target_length,
         length_tolerance=guard_args.length_tolerance,
+        target_ratio=guard_args.target_ratio,
+        tolerance_ratio=guard_args.tolerance_ratio,
         wrong_answer_length_mode=guard_args.wrong_answer_length_mode,
         answer_key="answer",
         is_correct_fn=is_correct_verdict,
         length_source="completion" if guard_args.native_thinking else "think",
     )
-    if guard_args.target_length > 0:
+    if guard_args.target_ratio > 0:
+        tr = guard_args.tolerance_ratio or "length_tolerance"
+        print(f"[guard] length reward = closeness to a POLICY-SCALED target "
+              f"(target={guard_args.target_ratio}*policy_tok, tol={tr}*policy_tok) "
+              f"for CORRECT answers", flush=True)
+    elif guard_args.target_length > 0:
         tol = guard_args.length_tolerance or eff_max_think
         print(f"[guard] length reward = closeness to target_length={guard_args.target_length} "
               f"(±{tol} tok -> 0) for CORRECT answers", flush=True)
@@ -210,11 +225,12 @@ def main():
             if not ((i == 0) if every <= 0 else (i % every == 0)):
                 return [0.0] * len(completions)
             gold = kwargs.get("answer", [None] * len(completions))
+            plen = kwargs.get("policy_len", [None] * len(completions))
             n = min(n_gen, len(completions))
             p = prompts[0]
             ptxt = p if isinstance(p, str) else (p[-1].get("content", "") if isinstance(p, list) and p else str(p))
             print("\n" + "=" * 72)
-            print(f"[dump] batch {i}: one group of {n} completions | gold={gold[0]}")
+            print(f"[dump] batch {i}: one group of {n} completions | gold={gold[0]} | policy_len={plen[0]}")
             print(f"[dump] prompt tail: ...{ptxt[-160:]!r}")
             for j in range(n):
                 t = get_completion_text(completions[j])

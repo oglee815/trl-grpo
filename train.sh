@@ -24,6 +24,8 @@ max_think_tokens=512
 brevity_weight=0.5
 target_length=0                  # >0: correct answers rewarded for reasoning NEAR this length
 length_tolerance=0               # tokens from target where that reward hits 0 (0 = max_think_tokens)
+target_ratio=0                   # >0: target = target_ratio * policy tokens (scale with policy length)
+tolerance_ratio=0                # >0: tolerance = tolerance_ratio * policy tokens
 temperature=1.0
 save_steps=50
 max_steps=-1
@@ -58,6 +60,8 @@ while [[ "$#" -gt 0 ]]; do
     --brevity_weight) brevity_weight="$2"; shift ;;
     --target_length) target_length="$2"; shift ;;
     --length_tolerance) length_tolerance="$2"; shift ;;
+    --target_ratio) target_ratio="$2"; shift ;;
+    --tolerance_ratio) tolerance_ratio="$2"; shift ;;
     --temperature) temperature="$2"; shift ;;
     --save_steps) save_steps="$2"; shift ;;
     --max_steps) max_steps="$2"; shift ;;
@@ -104,6 +108,8 @@ torchrun --nproc_per_node="${gpus}" train_guard.py \
     --brevity_weight="${brevity_weight}" \
     --target_length="${target_length}" \
     --length_tolerance="${length_tolerance}" \
+    --target_ratio="${target_ratio}" \
+    --tolerance_ratio="${tolerance_ratio}" \
     --temperature="${temperature}" \
     --think_open="${think_open}" \
     --think_close="${think_close}" \

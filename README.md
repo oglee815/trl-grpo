@@ -146,6 +146,19 @@ Two gotchas:
   bash train.sh --model /path/to/gemma-4-E2B-it --data dataset/guard_train.jsonl \
     --native --target_length 200 --length_tolerance 300
   ```
+- **Policy-scaled target** — `--target_ratio R` (`--tolerance_ratio Rt`): instead
+  of one fixed target for every example, set the target *per example* from the
+  policy length: `target = R * policy_tokens`, `tolerance = Rt * policy_tokens`.
+  A long policy has more to interpret, so it warrants — and is rewarded for —
+  proportionally longer reasoning; a short policy should be read concisely. The
+  policy token length is attached as a `policy_len` column in `build_dataset` and
+  read by the reward; target is clamped to `[1, max_think_tokens]`. Overrides the
+  fixed `--target_length` when set. (`--dump` prints `policy_len` per group so you
+  can eyeball the scaling.)
+  ```bash
+  bash train.sh --model /path/to/gemma-4-E2B-it --data dataset/guard_train.jsonl \
+    --native --target_ratio 0.5 --tolerance_ratio 1.0
+  ```
 
 
 ### Example

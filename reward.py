@@ -170,6 +170,13 @@ def build_reward_funcs(
                                     # *near* this length, not for being shortest.
     length_tolerance: int = 0,      # tokens away from target where that reward
                                     # reaches 0; 0 -> use max_think_tokens.
+    target_ratio: float = 0.0,      # >0: per-example target = target_ratio * policy
+                                    # tokens (scale the reasoning budget with policy
+                                    # length); overrides the fixed target_length.
+    tolerance_ratio: float = 0.0,   # >0: per-example tolerance = tolerance_ratio *
+                                    # policy tokens; else fall back to length_tolerance.
+    policy_len_key: str = "policy_len",  # dataset column carrying each example's policy
+                                         # token length (added by build_dataset).
     wrong_answer_length_mode: str = "shorter_better",  # or "longer_better"
     answer_key: str = "answer",
     is_correct_fn=None,   # task-specific correctness; e.g. is_correct_verdict for the guard
@@ -192,6 +199,17 @@ def build_reward_funcs(
         keep following `wrong_answer_length_mode` (correctness still dominates
         via w_c > w_b, so a correct off-target answer still beats any wrong one).
 
+    target_ratio / tolerance_ratio (policy-length-scaled targets):
+      - When target_ratio > 0 and the dataset carries a per-example policy length
+        (kwargs[policy_len_key]), the target is computed per example as
+        round(target_ratio * policy_tokens) instead of the fixed target_length,
+        and the tolerance as round(tolerance_ratio * policy_tokens) when
+        tolerance_ratio > 0. Rationale: a longer policy has more to interpret, so
+        it warrants (and is rewarded for) proportionally longer reasoning; a short
+        policy should be read concisely. Target is clamped to [1, max_think_tokens]
+        and tolerance to >= 1. Falls back to the fixed target_length if the policy
+        length is missing.
+
     wrong_answer_length_mode:
       - "shorter_better": wrong+short > wrong+long  (the requested spec; rewards
         failing fast — saves compute but reduces exploration on hard problems).
@@ -211,10 +229,21 @@ def build_reward_funcs(
             out.append(1.0 if _correct(text, g) else 0.0)
         return out
 
+    def _resolve_target(pol_lens, i):
+        """Per-example (target, tolerance) in tokens. Scales with policy length
+        when target_ratio>0 and a policy length is available; else fixed."""
+        if target_ratio > 0.0 and pol_lens is not None:
+            pl = pol_lens[i]
+            tgt = min(max(1, round(target_ratio * pl)), max_think_tokens)
+            tol = max(1, round(tolerance_ratio * pl)) if tolerance_ratio > 0.0 else _tol
+            return tgt, tol
+        return target_length, _tol
+
     def brevity_reward(prompts=None, completions=None, **kwargs) -> List[float]:
         gold = kwargs[answer_key]
+        pol_lens = kwargs.get(policy_len_key)
         out = []
-        for comp, g in zip(completions, gold):
+        for i, (comp, g) in enumerate(zip(completions, gold)):
             text = get_completion_text(comp)
             if length_source == "completion":
                 span = text          # whole completion ≈ reasoning (+ a one-word verdict)
@@ -225,9 +254,10 @@ def build_reward_funcs(
                     continue
             n_tok = count_think_tokens(span, tokenizer)
             correct = _correct(extract_final_answer(text), g)
-            if target_length > 0 and correct:
-                # reward reasoning length *near* the target (correct answers only)
-                out.append(_length_target_score(n_tok, target_length, _tol, free_think_tokens))
+            tgt, tol = _resolve_target(pol_lens, i)
+            if tgt > 0 and correct:
+                # reward reasoning length *near* the (maybe policy-scaled) target
+                out.append(_length_target_score(n_tok, tgt, tol, free_think_tokens))
             else:
                 # shorter/longer-is-better — also how every wrong answer is scored
                 norm = _length_norm(n_tok, max_think_tokens, free_think_tokens)
