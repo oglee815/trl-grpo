@@ -30,6 +30,12 @@ class GuardArgs:
     max_think_tokens: int = field(default=512, metadata={"help": "brevity normalizer"})
     brevity_weight: float = field(default=0.5, metadata={"help": "must stay < 1.0"})
     format_weight: float = 0.2
+    target_length: int = field(default=0, metadata={
+        "help": "if >0, a correct answer's length reward peaks at this many think "
+                "tokens (closeness), instead of the default shorter-is-better"})
+    length_tolerance: int = field(default=0, metadata={
+        "help": "tokens away from target_length where that reward hits 0; "
+                "0 = use max_think_tokens"})
     wrong_answer_length_mode: str = field(default="shorter_better",
                                           metadata={"help": "shorter_better | longer_better"})
     think_open: str = "<think>"
@@ -173,11 +179,17 @@ def main():
     correctness, brevity, fmt = build_reward_funcs(
         tokenizer=tokenizer,
         max_think_tokens=eff_max_think,
+        target_length=guard_args.target_length,
+        length_tolerance=guard_args.length_tolerance,
         wrong_answer_length_mode=guard_args.wrong_answer_length_mode,
         answer_key="answer",
         is_correct_fn=is_correct_verdict,
         length_source="completion" if guard_args.native_thinking else "think",
     )
+    if guard_args.target_length > 0:
+        tol = guard_args.length_tolerance or eff_max_think
+        print(f"[guard] length reward = closeness to target_length={guard_args.target_length} "
+              f"(±{tol} tok -> 0) for CORRECT answers", flush=True)
     reward_funcs = [correctness, brevity, fmt]
     training_args.reward_weights = [1.0, guard_args.brevity_weight, fmt_weight]
 

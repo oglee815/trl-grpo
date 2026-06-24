@@ -84,8 +84,41 @@ def test_guard_verdict():
     print("OK  guard: real channel format parses (<channel|>block -> block)")
 
 
+def test_target_length_mode():
+    """target_length>0: a correct answer's length reward peaks AT the target and
+    falls off on both sides, so:  correct@target > correct@short > correct@long
+    (3 is nearer to 20 than 45 is) > wrong.  Correctness still dominates."""
+    from reward import is_correct_verdict
+    reward.set_think_delimiters("<think>", "</think>")
+    correctness, brevity, fmt = build_reward_funcs(
+        tokenizer=None, max_think_tokens=50,
+        target_length=20, length_tolerance=50,
+        answer_key="label", is_correct_fn=is_correct_verdict,
+    )
+    mk = lambda n, v: f"<think>{' '.join(['reason'] * n)}</think>\n{v}"
+    cases = {
+        "correct@target": mk(20, "block"),  # n == target  -> 1.0
+        "correct@short":  mk(3,  "block"),  # 17 below target
+        "correct@long":   mk(45, "block"),  # 25 above target
+        "wrong@target":   mk(20, "allow"),  # right length, wrong verdict
+    }
+    comps, gold = list(cases.values()), ["block"] * 4
+    cr = correctness(completions=comps, label=gold)
+    br = brevity(completions=comps, label=gold)
+    fr = fmt(completions=comps, label=gold)
+    total = [W_C * c + W_B * b + W_F * f for c, b, f in zip(cr, br, fr)]
+    print("\n[target-length mode]")
+    print(f"{'case':16s} {'correct':>8s} {'brevity':>8s} {'TOTAL':>7s}")
+    for name, c, b, t in zip(cases, cr, br, total):
+        print(f"{name:16s} {c:8.2f} {b:8.3f} {t:7.3f}")
+    assert total[0] > total[1] > total[2] > total[3], "TARGET-LENGTH ORDERING VIOLATED"
+    print("OK  target: correct@target > correct@short > correct@long > wrong")
+    reward.set_think_delimiters("<think>", "</think>")
+
+
 if __name__ == "__main__":
     test_toy_format()
     test_gemma4_channel_format()
     test_guard_verdict()
+    test_target_length_mode()
     print("\nALL OK")

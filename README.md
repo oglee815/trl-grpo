@@ -134,6 +134,18 @@ Two gotchas:
   preserve exploration on hard problems), `free_think_tokens` (no-penalty budget),
   and consider hardening correctness to require the `#### N` marker (the last-number
   fallback can score garbled output as correct).
+- **Target-length mode** — `--target_length N` (`--length_tolerance T`, default
+  `max_think_tokens`): swap "shorter-is-better" for "**closeness-is-better**" on
+  *correct* answers — the length reward peaks at `N` think tokens and decays to 0
+  by `T` tokens away on either side, so reasoning that is *too short* is penalized
+  too. The ordering becomes `correct@target > correct@off-target > wrong`; wrong
+  answers still follow `wrong_answer_length_mode`, and `w_c > w_b` keeps any
+  correct answer above any wrong one. Use it to stop the model collapsing to
+  near-zero reasoning when you want it to actually think for a set budget.
+  ```bash
+  bash train.sh --model /path/to/gemma-4-E2B-it --data dataset/guard_train.jsonl \
+    --native --target_length 200 --length_tolerance 300
+  ```
 
 
 ### Example

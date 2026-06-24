@@ -146,6 +146,19 @@ def _length_norm(n: int, max_tokens: int, free: int = 0) -> float:
     return (n - free) / (max_tokens - free)
 
 
+def _length_target_score(n: int, target: int, tol: int, free: int = 0) -> float:
+    """Map a token count to [0,1] by *closeness to a target length*: 1.0 at
+    n == target (and within ±`free` of it), decaying linearly to 0 once n is
+    `tol` tokens away from target. Two-sided, so both too-short and too-long
+    reasoning are penalized symmetrically in |n - target|. Use this instead of
+    `_length_norm` when the goal is to reason for *about* a set length rather
+    than as little as possible."""
+    d = abs(n - target)
+    if d <= free:
+        return 1.0
+    return max(0.0, 1.0 - (d - free) / max(tol - free, 1.0))
+
+
 # ---------------------------------------------------------------------------
 # Reward factory
 # ---------------------------------------------------------------------------
@@ -153,6 +166,10 @@ def build_reward_funcs(
     tokenizer=None,
     max_think_tokens: int = 512,
     free_think_tokens: int = 0,
+    target_length: int = 0,         # >0: correct answers are rewarded for reasoning
+                                    # *near* this length, not for being shortest.
+    length_tolerance: int = 0,      # tokens away from target where that reward
+                                    # reaches 0; 0 -> use max_think_tokens.
     wrong_answer_length_mode: str = "shorter_better",  # or "longer_better"
     answer_key: str = "answer",
     is_correct_fn=None,   # task-specific correctness; e.g. is_correct_verdict for the guard
@@ -166,15 +183,25 @@ def build_reward_funcs(
     Plug into TRL with reward_weights=[1.0, 0.5, 0.2] (w_c > w_b is the only
     hard requirement; format weight is orthogonal / bootstrapping only).
 
+    target_length (length shaping for CORRECT answers):
+      - 0 (default): shorter-is-better — correct answers prefer fewer think tokens.
+      - >0: closeness-is-better — a correct answer is rewarded most when its
+        reasoning length is *near* target_length, and less as it drifts shorter
+        OR longer (decaying to 0 at length_tolerance tokens away; tolerance
+        defaults to max_think_tokens). Wrong answers are unaffected by this and
+        keep following `wrong_answer_length_mode` (correctness still dominates
+        via w_c > w_b, so a correct off-target answer still beats any wrong one).
+
     wrong_answer_length_mode:
       - "shorter_better": wrong+short > wrong+long  (the requested spec; rewards
         failing fast — saves compute but reduces exploration on hard problems).
       - "longer_better":  wrong+long  > wrong+short (cosine-reward style; keeps
-        exploration alive when the model is unsure). Correct answers always
-        prefer shorter regardless of this flag.
+        exploration alive when the model is unsure). In default (shorter) mode
+        correct answers prefer shorter; with target_length>0 they prefer target.
     """
 
     _correct = is_correct_fn or is_correct
+    _tol = length_tolerance if length_tolerance > 0 else max_think_tokens
 
     def correctness_reward(prompts=None, completions=None, **kwargs) -> List[float]:
         gold = kwargs[answer_key]
@@ -196,9 +223,15 @@ def build_reward_funcs(
                 if not span:         # missing/empty think block -> no brevity bonus
                     out.append(0.0)
                     continue
-            norm = _length_norm(count_think_tokens(span, tokenizer), max_think_tokens, free_think_tokens)
+            n_tok = count_think_tokens(span, tokenizer)
             correct = _correct(extract_final_answer(text), g)
-            out.append((1.0 - norm) if (correct or wrong_answer_length_mode == "shorter_better") else norm)
+            if target_length > 0 and correct:
+                # reward reasoning length *near* the target (correct answers only)
+                out.append(_length_target_score(n_tok, target_length, _tol, free_think_tokens))
+            else:
+                # shorter/longer-is-better — also how every wrong answer is scored
+                norm = _length_norm(n_tok, max_think_tokens, free_think_tokens)
+                out.append((1.0 - norm) if (correct or wrong_answer_length_mode == "shorter_better") else norm)
         return out
 
     def format_reward(prompts=None, completions=None, **kwargs) -> List[float]:

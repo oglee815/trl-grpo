@@ -22,6 +22,8 @@ max_prompt_length=2048
 max_completion_length=1024
 max_think_tokens=512
 brevity_weight=0.5
+target_length=0                  # >0: correct answers rewarded for reasoning NEAR this length
+length_tolerance=0               # tokens from target where that reward hits 0 (0 = max_think_tokens)
 temperature=1.0
 save_steps=50
 max_steps=-1
@@ -51,6 +53,8 @@ while [[ "$#" -gt 0 ]]; do
     --max_completion_length) max_completion_length="$2"; shift ;;
     --max_think_tokens) max_think_tokens="$2"; shift ;;
     --brevity_weight) brevity_weight="$2"; shift ;;
+    --target_length) target_length="$2"; shift ;;
+    --length_tolerance) length_tolerance="$2"; shift ;;
     --temperature) temperature="$2"; shift ;;
     --save_steps) save_steps="$2"; shift ;;
     --max_steps) max_steps="$2"; shift ;;
@@ -95,6 +99,8 @@ torchrun --nproc_per_node="${gpus}" train_guard.py \
     --max_completion_length="${max_completion_length}" \
     --max_think_tokens="${max_think_tokens}" \
     --brevity_weight="${brevity_weight}" \
+    --target_length="${target_length}" \
+    --length_tolerance="${length_tolerance}" \
     --temperature="${temperature}" \
     --think_open="${think_open}" \
     --think_close="${think_close}" \
