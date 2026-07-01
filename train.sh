@@ -94,7 +94,9 @@ $use_peft  && extra+=(--use_peft --lora_r 16 --lora_alpha 32 --lora_target_modul
 $dump      && extra+=(--dump_completions --dump_every "${dump_every}" --dump_chars "${dump_chars}")
 
 echo "output_dir=${output_dir}"
-torchrun --nproc_per_node="${gpus}" train_guard.py \
+# --standalone: single-node job with an auto-picked FREE rendezvous port, so two
+# concurrent runs on the same box (e.g. one per GPU) don't collide on port 29500.
+torchrun --standalone --nproc_per_node="${gpus}" train_guard.py \
     --model_name_or_path="${model}" \
     --dataset_name="${data}" \
     --output_dir="${output_dir}" \
